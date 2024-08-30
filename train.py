@@ -35,6 +35,9 @@ parser.add_argument('--lr_d', type=float, default=0.00002, help='learning rate f
 parser.add_argument('--use_pretrain', type=bool, default=False, help='if use pretrained model or not?')
 parser.add_argument('--which_exp', type=str, default='10', help='which exp?')
 parser.add_argument('--which_epoch', type=str, default='final', help='which epoch?')
+parser.add_argument('--use_target_pose', type=bool, default=True, help='Include target pose in the discriminator input')
+parser.add_argument('--ema_rate', type=float, default=0.9999, help='decay rate for EMA')
+parser.add_argument('--input_type', type=str, default="heatmaps", help='options: heatmaps / depth / segm / normal')
 
 args, _ = parser.parse_known_args()
 
@@ -45,11 +48,12 @@ num_gpus = torch.cuda.device_count()
 device = torch.device("cuda" if num_gpus > 0 else "cpu")
 
 # ---------------------------------------------------------------------------------------------------------
+# n_kp is the number of channels in the condition image
 if args.ds_name == "Bosphorus":
     from DS_loader.DS_Bosphorus import DS_Bosphorus
     train_dataset = DS_Bosphorus(train=True)
     test_dataset = DS_Bosphorus(train=False)
-    n_kp = 96
+    n_kp = 96 if args.input_type == "heatmaps" else 32
 elif args.ds_name == "DeepFashion":
     from DS_loader.DS_DeepFashion import DS_DeepFashion
     train_dataset = DS_DeepFashion(train=True)
@@ -59,12 +63,12 @@ elif args.ds_name == "Phoenix":
     from DS_loader.DS_Phoenix import DS_Phoenix
     train_dataset = DS_Phoenix(train=True)
     test_dataset = DS_Phoenix(train=False)
-    n_kp = 96
+    n_kp = 96 if args.input_type == "heatmaps" else 32
 elif args.ds_name == "SynthSL":
     from DS_loader.DS_SynthSL import DS_SynthSL
     train_dataset = DS_SynthSL(train=True)
     test_dataset = DS_SynthSL(train=False)
-    n_kp = 96
+    n_kp = 96 if args.input_type == "heatmaps" else 32
 
 # ---------------------------------------------------------------------------------------------------------
 net_G_dict = {
@@ -75,14 +79,17 @@ net_G_dict = {
     4: ("Swin_v2",          SwinTransformerV2(img_size=256, window_size=8, in_chans=2*n_kp+3)),
     5: ("Swin_v2_concat3",   SwinTransformerV2_concat3(n_kp=n_kp, img_size=256, window_size=8, in_chans=2*n_kp+3)),
     6: ("Swin_v2_concat4",   SwinTransformerV2_concat4(n_kp=n_kp, img_size=256, window_size=8, in_chans=3)),
-    7: ("Swin_v2_concat5",   SwinTransformerV2_concat5(n_kp=n_kp, img_size=256, window_size=8, in_chans=2*n_kp+3)),
+    7: ("Swin_v2_concat5",   SwinTransformerV2_concat5(n_kp=n_kp, img_size=256, window_size=8, in_chans=n_kp+(96 if args.input_type=='heatmaps' else 3)+3)),
     8: ("StyleSwin",        Generator(size=256, n_kp=n_kp)),
     9: ("DPTN",             DPTNGenerator(image_nc=3, pose_nc=n_kp, ngf=64, img_f=512, layers=3, norm='instance', activation='LeakyReLU', 
                                       use_spect=False, use_coord=False, output_nc=3, num_blocks=3, affine=True, nhead=2, num_CABs=2, num_TTBs=2))
 }
 net_G_name = net_G_dict[args.which_g][0]
 net_G = net_G_dict[args.which_g][1]
-net_D = ResDiscriminator(input_nc=3, ndf=32, img_f=128, layers=3, norm='none', activation='LeakyReLU', use_spect=True)
+input_nc = 3
+if args.use_target_pose:
+    input_nc += n_kp if args.input_type == 'heatmaps' else 3
+net_D = ResDiscriminator(input_nc=input_nc, ndf=32, img_f=128, layers=3, norm='none', activation='LeakyReLU', use_spect=True)
 print_model_size(net_G)
 
 # ---------------------------------------------------------------------------------------------------------

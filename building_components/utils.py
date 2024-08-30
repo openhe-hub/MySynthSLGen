@@ -74,6 +74,41 @@ class ColorPrinter:
         else:
             print("Invalid color specified.")
 
+class EMA:
+    def __init__(self, model, beta=0.9999, start_step=100):
+        self.model = model
+        self.beta = beta
+        self.start_step = start_step
+        self.current_step = 0
+        self.shadow = {}
+        self.backup = {}
+
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.shadow[name] = param.data.clone().to(param.device)
+
+    def update(self):
+        self.current_step += 1
+        if self.current_step < self.start_step:
+            return
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                assert name in self.shadow
+                new_average = (1.0 - self.beta) * param.data + self.beta * self.shadow[name].to(param.device)
+                self.shadow[name] = new_average.clone()
+
+    def apply_shadow(self):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                self.backup[name] = param.data.clone()
+                param.data = self.shadow[name].to(param.device)
+
+    def restore(self):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                param.data = self.backup[name].to(param.device)
+        self.backup = {}
+
 
 def print_model_size(model):
     param_size = 0

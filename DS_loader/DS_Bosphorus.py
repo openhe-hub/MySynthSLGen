@@ -34,16 +34,21 @@ class ReadData_Bosphorus(IterDataPipe):
 
         # self.base_imgs_path = "/home/cwang/Projects/thesis/dataset/bosphorus/mp96/base_images"
         # self.base_kps_path = "/home/cwang/Projects/thesis/dataset/bosphorus/mp96/base_kps"
-        self.base_imgs_path = "/netscratch/cwang/datasets/bosphorus/mp96/base_images"
-        self.base_kps_path = "/netscratch/cwang/datasets/bosphorus/mp96/base_kps"
-        self.base_imgs_dict = {}
-        self.base_heatmaps_dict = {}
+        self.base_imgs_tar = "/netscratch/alnaqish/datasets/bosphorus/mp96/base_images.tar.gz"
+        self.base_kps_tar = "/netscratch/alnaqish/datasets/bosphorus/mp96/base_kps.tar.gz"
+        self.base_imgs_dict, self.base_kps_dict = self.get_base_info()
 
 
     def __iter__(self):
         for data in self.source_datapipe:
             path = data[0][0]
-            base_img, base_heatmaps = self.get_base_info(path)
+            seq = path.split('/')[-2]
+            seq = seq.split('.')
+            seq = '.'.join(seq[:3])
+            base_img = self.base_imgs_dict[seq]
+            base_kps = self.base_kps_dict[seq]
+            base_heatmaps = self.kps_to_heatmaps(base_kps)
+            base_depth = self.base_depths_dict[seq]
             
             for i in range(len(data)):
                 stream = data[i][1].read()
@@ -76,33 +81,32 @@ class ReadData_Bosphorus(IterDataPipe):
             # axs[1, 1].axis('off')
             # plt.tight_layout()
             # plt.show(block=True)
-                
-            yield base_img, base_heatmaps, img, kps, heatmaps, depth
+
+            yield base_img, base_heatmaps, base_depth, 0, 0, img, kps, heatmaps, depth, 0, 0
     
     
-    def get_base_info(self, path):
-        seq = path.split('/')[-2]
-        seq = seq.split('.')
-        seq = '.'.join(seq[:3])
+    def get_base_info(self):
+        tar = tarfile.open(self.base_imgs_tar)
+        base_imgs_dict = {}
+        for name, member in zip(tar.getnames(), tar.getmembers()):
+            seq = name.rsplit('.', 1)[0]
+            img = tar.extractfile(member)
+            img = img.read()
+            img = Image.open(io.BytesIO(img))
+            base_imgs_dict[seq] = self.transform(img)
+        tar.close()
+        tar = tarfile.open(self.base_kps_tar)
+        base_kps_dict = {}
+        for name, member in zip(tar.getnames(), tar.getmembers()):
+            seq = name.rsplit('.', 1)[0]
+            kps = tar.extractfile(member)
+            kps = kps.read()
+            kps = pickle.load(io.BytesIO(kps)) * 256
+            base_kps_dict[seq] = kps
+        tar.close()
 
-        if(seq in self.base_imgs_dict):
-            return self.base_imgs_dict[seq], self.base_heatmaps_dict[seq]
-        else:
-            base_img_path = os.path.join(self.base_imgs_path, seq+'.png')
-            base_img = Image.open(base_img_path)
-            base_img = self.transform(base_img)
-            self.base_imgs_dict[seq] = base_img
-
-            base_kps_path = os.path.join(self.base_kps_path, seq+'.pickle')
-            with open(base_kps_path, "rb") as f:
-                kps = pickle.load(f)
-                kps[:, 0] = (kps[:, 0] - 0.25) / 0.5
-                kps = kps * 256
-            base_heatmaps = self.kps_to_heatmaps(kps)
-            self.base_heatmaps_dict[seq] = base_heatmaps
-                        
-            return base_img, base_heatmaps
-            
+        return base_imgs_dict, base_kps_dict
+        
 
     def kps_to_heatmaps(self, keypoints, sigma=6):
         heatmaps = []
@@ -138,16 +142,17 @@ class DS_Bosphorus():
 
         if(self.train):
             # self.path = '/home/cwang/Projects/thesis/dataset/bosphorus/mp96/train'
-            self.path = '/netscratch/cwang/datasets/bosphorus/mp96/train'
+            self.path = '/netscratch/alnaqish/datasets/bosphorus/mp96/train'
         else:
             # self.path = '/home/cwang/Projects/thesis/dataset/bosphorus/mp96/test'
-            self.path = '/netscratch/cwang/datasets/bosphorus/mp96/test'
+            self.path = '/netscratch/alnaqish/datasets/bosphorus/mp96/test'
 
         corrupted = ['0003.2.003.tar.gz', '0253.5.005.tar.gz', '0003.4.002.tar.gz', '0222.6.007.tar.gz', '0253.2.003.tar.gz',
                     '0248.2.005.tar.gz', '0003.2.006.tar.gz', '0222.7.006.tar.gz']
         
         # since that the dataset is so huge we will take a part of it
         self.tars = [os.path.join(self.path, file) for file in os.listdir(self.path) if not file in corrupted]
+        self.tars.sort()
         num_tars = len(self.tars)
         self.used_tars = num_tars//25
         self.tars = self.tars[:self.used_tars]

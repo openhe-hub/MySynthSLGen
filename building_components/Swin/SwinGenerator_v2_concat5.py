@@ -684,6 +684,7 @@ class SwinTransformerV2_concat5(nn.Module):
                                use_checkpoint=use_checkpoint,
                                pretrained_window_size=pretrained_window_sizes[i_layer])
             self.layers.append(layer)
+        self.ext_target_pose = nn.Conv2d(3, n_kp, kernel_size=3, padding=1)
 
         # ====================================================================
         # create upsampling layers 
@@ -721,7 +722,7 @@ class SwinTransformerV2_concat5(nn.Module):
     def no_weight_decay_keywords(self):
         return {"cpb_mlp", "logit_scale", 'relative_position_bias_table'}
 
-    def forward_features(self, x, heatmaps):
+    def forward_features(self, x, target_pose):
         x = self.patch_embed(x)
         if self.ape:
             x = x + self.absolute_pos_embed
@@ -733,7 +734,7 @@ class SwinTransformerV2_concat5(nn.Module):
         for layer in self.layers:
             r.append(x)
             s = int(x.shape[1]**0.5)
-            h = F.interpolate(heatmaps, size=(s, s))
+            h = F.interpolate(target_pose, size=(s, s))
             h = h.flatten(2)
             h = h.transpose(1, 2)
             # print("ZYZY: r[i].shape:", x.shape)
@@ -747,16 +748,17 @@ class SwinTransformerV2_concat5(nn.Module):
         
         return x, r
 
-    def forward(self, base_image, base_heatmap, heatmaps):
-        x = torch.cat([base_image, base_heatmap, heatmaps], dim=1)
+    def forward(self, base_image, base_pose, target_pose):
+        if target_pose.shape[1] == 3:
+            target_pose = self.ext_target_pose(target_pose)
+        x = torch.cat([base_image, base_pose, target_pose], dim=1)
 
-        x, r = self.forward_features(x, heatmaps)
-        
+        x, r = self.forward_features(x, target_pose)
         # ==========================================
         # add residual connections
         for i, layer in enumerate(self.up_layers):
             s = int(x.shape[1]**0.5)
-            h = F.interpolate(heatmaps, size=(s, s))
+            h = F.interpolate(target_pose, size=(s, s))
             h = h.flatten(2)
             h = h.transpose(1, 2)
             # print("ZYZY: x.shape:", x.shape)
@@ -766,7 +768,7 @@ class SwinTransformerV2_concat5(nn.Module):
             x = layer(x)
         # ==========================================
         s = int(x.shape[1]**0.5)
-        h = F.interpolate(heatmaps, size=(s, s))
+        h = F.interpolate(target_pose, size=(s, s))
         h = h.flatten(2)
         h = h.transpose(1, 2)
         # print("ZYZY: x.shape:", x.shape)

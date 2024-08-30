@@ -35,6 +35,9 @@ class ReadData_SynthSL(IterDataPipe):
         self.base_imgs_tar = '/ds-av/internal_datasets/synthsl/wds/v1.0/base_imgs_tar.tar'
         self.base_kps_tar = '/ds-av/internal_datasets/synthsl/wds/v1.0/base_kps_tar.tar'
         self.base_metas_tar = '/ds-av/internal_datasets/synthsl/wds/v1.0/base_metas_tar.tar'
+        self.base_depths_tar = '/ds-av/internal_datasets/synthsl/wds/v1.0/base_depths_tar.tar'
+        self.base_segms_tar = '/ds-av/internal_datasets/synthsl/wds/v1.0/base_segms_tar.tar'
+        self.base_normals_tar = '/ds-av/internal_datasets/synthsl/wds/v1.0/base_normals_tar.tar'
 
         self.use_meta = True
         self.useful_keys = [0, 9, 12, 16, 17, 18, 19, 20, 21, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 
@@ -43,7 +46,7 @@ class ReadData_SynthSL(IterDataPipe):
                             89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 
                             108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 120, 121, 122, 124, 125, 126]
 
-        self.base_imgs_dict, self.base_kps_dict = self.get_base_info()
+        self.base_imgs_dict, self.base_kps_dict, self.base_depths_dict, self.base_segms_dict, self.base_normals_dict = self.get_base_info()
 
 
     def __iter__(self):
@@ -54,7 +57,10 @@ class ReadData_SynthSL(IterDataPipe):
             base_img = self.base_imgs_dict[seq_number]
             base_kps = self.base_kps_dict[seq_number]
             base_heatmaps = self.kps_to_heatmaps(base_kps)
-            
+            base_depth = self.base_depths_dict[seq_number]
+            base_segm = self.base_segms_dict[seq_number]
+            base_normal = self.base_normals_dict[seq_number]
+
             for i in range(len(data)):
                 stream = data[i][1]
 
@@ -78,7 +84,11 @@ class ReadData_SynthSL(IterDataPipe):
 
                     depth = self.transform(depth)
                 elif "segm" in data[i][0]:
-                    pass
+                    segm = Image.open(io.BytesIO(stream))
+                    segm = self.transform(segm)
+                elif "normal" in data[i][0]:
+                    normal = Image.open(io.BytesIO(stream))
+                    normal = self.transform(normal)
 
             # # Create a figure with two subplots
             # fig, axs = plt.subplots(2, 2, figsize=(10, 10))
@@ -97,7 +107,7 @@ class ReadData_SynthSL(IterDataPipe):
             # plt.tight_layout()
             # plt.show(block=True)
 
-            yield base_img, base_heatmaps, img, kps, heatmaps, depth
+            yield base_img, base_heatmaps, base_depth, base_segm, base_normal, img, kps, heatmaps, depth, segm, normal
     
 
     def get_base_info(self):
@@ -124,6 +134,38 @@ class ReadData_SynthSL(IterDataPipe):
             base_kps_dict[seq] = kps
         tar.close()
 
+        tar = tarfile.open(self.base_depths_tar)
+        base_depths_dict = {}
+        for name, member in zip(tar.getnames(), tar.getmembers()):
+            seq = name.split('.')[0]
+            depth = tar.extractfile(member)
+            depth = depth.read()
+            depth = Image.open(io.BytesIO(depth))
+            if(len(depth.size) == 2):
+                depth = depth.convert('RGB')
+            base_depths_dict[seq] = self.transform(depth)
+        tar.close()
+
+        tar = tarfile.open(self.base_segms_tar)
+        base_segms_dict = {}
+        for name, member in zip(tar.getnames(), tar.getmembers()):
+            seq = name.split('.')[0]
+            segm = tar.extractfile(member)
+            segm = segm.read()
+            segm = Image.open(io.BytesIO(segm))
+            base_segms_dict[seq] = self.transform(segm)
+        tar.close()
+
+        tar = tarfile.open(self.base_normals_tar)
+        base_normals_dict = {}
+        for name, member in zip(tar.getnames(), tar.getmembers()):
+            seq = name.split('.')[0]
+            normal = tar.extractfile(member)
+            normal = normal.read()
+            normal = Image.open(io.BytesIO(normal))
+            base_normals_dict[seq] = self.transform(normal)
+        tar.close()
+
         # tar = tarfile.open(self.base_metas_tar)
         # base_kps_dict = {}
         # for name, member in zip(tar.getnames(), tar.getmembers()):
@@ -137,7 +179,7 @@ class ReadData_SynthSL(IterDataPipe):
         #     base_kps_dict[seq] = kps
         # tar.close()
 
-        return base_imgs_dict, base_kps_dict
+        return base_imgs_dict, base_kps_dict, base_depths_dict, base_segms_dict, base_normals_dict
     
 
     def kps_to_heatmaps(self, keypoints, sigma=6):

@@ -12,6 +12,7 @@ from .DPTN import base_function
 
 from torch.utils.tensorboard import SummaryWriter
 from building_components.utils import OutputDirManager
+from building_components.utils import EMA
 
 class GANPipe():
     def __init__(self, args, device, net_G_name, net_G, net_D) -> None:
@@ -21,6 +22,9 @@ class GANPipe():
 
         self.net_G = net_G.to(device)
         self.net_D = net_D.to(device)
+
+        self.ema_generator = EMA(net_G, beta=args.ema_rate)
+        self.ema_discriminator = EMA(net_D, beta=args.ema_rate)
 
         self.optimizer_G = torch.optim.Adam(net_G.parameters(), lr=args.lr_g)
         self.optimizer_D = torch.optim.Adam(net_D.parameters(), lr=args.lr_d)
@@ -67,7 +71,10 @@ class GANPipe():
             self.optimizer_G.load_state_dict(gen['optimizer_state_dict'])
             self.net_D.load_state_dict(disc['model_state_dict'])
             self.optimizer_D.load_state_dict(disc['optimizer_state_dict'])
-
+            if 'ema_state_dict' in gen:
+                self.ema_generator.shadow = gen['ema_state_dict']
+            if 'ema_state_dict' in disc:
+                self.ema_discriminator.shadow = disc['ema_state_dict']
             self.start_epoch = int(gen['epoch'])+1
         else:
             self.start_epoch = 1
@@ -80,6 +87,11 @@ class GANPipe():
                 self.optimizer_G.load_state_dict(gen['optimizer_state_dict'])
                 self.net_D.load_state_dict(disc['model_state_dict'])
                 self.optimizer_D.load_state_dict(disc['optimizer_state_dict'])
+
+                if 'ema_state_dict' in gen:
+                    self.ema_generator.shadow = gen['ema_state_dict']
+                if 'ema_state_dict' in disc:
+                    self.ema_discriminator.shadow = disc['ema_state_dict']
 
 
         print("ZYZY: start_epoch: {}".format(self.start_epoch))
@@ -94,13 +106,15 @@ class GANPipe():
         torch.save({
             'epoch':str(epoch),
             'model_state_dict': self.net_G.module.state_dict(),
-            'optimizer_state_dict': self.optimizer_G.state_dict()
+            'optimizer_state_dict': self.optimizer_G.state_dict(),
+            'ema_state_dict': self.ema_generator.shadow
             }, os.path.join(self.save_dir_models, 'net_G', filename))
 
         torch.save({
             'epoch': str(epoch),
             'model_state_dict': self.net_D.module.state_dict(),
-            'optimizer_state_dict': self.optimizer_D.state_dict()
+            'optimizer_state_dict': self.optimizer_D.state_dict(),
+            'ema_state_dict': self.ema_discriminator.shadow
             }, os.path.join(self.save_dir_models, 'net_D', filename))
 
 
@@ -139,12 +153,27 @@ class GANPipe():
 
 
     def set_input(self, batch):
-        base_img, base_heatmap, img, coord, heatmap, depth = batch
+        base_img, base_heatmap, base_depth, base_segm, base_normal, img, coord, heatmap, depth, segm, normal = batch
         
+        valid_input_types = ['heatmaps', 'depth', 'segm', 'normal']
+        if self.args.input_type not in valid_input_types:
+            raise ValueError(f"Invalid input type: {self.args.input_type}. Must be one of {valid_input_types}.")
+
         self.source_image = base_img.to(self.device)
-        self.source_pose = base_heatmap.to(self.device)
+        self.source_pose = {
+            'heatmaps': base_heatmap.to(self.device),
+            'depth': base_depth.to(self.device),
+            'segm': base_segm.to(self.device),
+            'normal': base_normal.to(self.device)
+        }[self.args.input_type]
+        
         self.target_image = img.to(self.device)
-        self.target_pose = heatmap.to(self.device)
+        self.target_pose = {
+            'heatmaps': heatmap.to(self.device),
+            'depth': depth.to(self.device),
+            'segm': segm.to(self.device),
+            'normal': normal.to(self.device)
+        }[self.args.input_type]
 
         # if self.net_G_name == 'DPTN':
         #     self.target_pose = heatmap.to(self.device)
@@ -167,13 +196,19 @@ class GANPipe():
             self.fake_image_t, self.fake_image_s = self.net_G(self.source_image, self.source_pose, self.target_pose)
         else:
             self.fake_image_t = self.net_G(self.source_image, self.source_pose, self.target_pose)
+    
+    def get_disc_input(self, img, pose):
+        if not self.args.use_target_pose:
+            return img
+        return torch.cat((img, pose), dim=1)
 
-
-    def backward_D_basic(self, netD, real, fake):
+    def backward_D_basic(self, netD, real_image, fake_image, target_pose):
         # Real
+        real = self.get_disc_input(real_image, target_pose)
         D_real = netD(real)
         D_real_loss = self.GANloss(D_real, True, True)
         # fake
+        fake = self.get_disc_input(fake_image, target_pose)
         D_fake = netD(fake.detach())
         D_fake_loss = self.GANloss(D_fake, False, True)
         # loss for discriminator
@@ -188,12 +223,12 @@ class GANPipe():
 
     def backward_D(self):
         base_function._unfreeze(self.net_D)
-        self.loss_dis_img_gen_t = self.backward_D_basic(self.net_D, self.target_image, self.fake_image_t)
+        self.loss_dis_img_gen_t = self.backward_D_basic(self.net_D, self.target_image, self.fake_image_t, self.target_pose)
         D_loss = self.loss_dis_img_gen_t
         D_loss.backward()
 
 
-    def backward_G_basic(self, fake_image, target_image, use_d):
+    def backward_G_basic(self, fake_image, target_image, target_pose, use_d):
         # Calculate reconstruction loss
         loss_G_l1 = self.L1loss(fake_image, target_image)
         loss_G_l1 = loss_G_l1 * self.lambda_l1
@@ -202,7 +237,8 @@ class GANPipe():
         loss_G_ad = None
         if use_d:
             base_function._freeze(self.net_D)
-            D_fake = self.net_D(fake_image)
+            fake = self.get_disc_input(fake_image, target_pose)
+            D_fake = self.net_D(fake)
             loss_G_ad = self.GANloss(D_fake, True, False) * self.lambda_ad
 
         # Calculate perceptual loss
@@ -216,7 +252,7 @@ class GANPipe():
     def backward_G(self):
         base_function._unfreeze(self.net_D)
 
-        self.loss_G_l1_t, self.loss_G_ad_t, self.loss_G_style_t, self.loss_G_content_t = self.backward_G_basic(self.fake_image_t, self.target_image, use_d = True)
+        self.loss_G_l1_t, self.loss_G_ad_t, self.loss_G_style_t, self.loss_G_content_t = self.backward_G_basic(self.fake_image_t, self.target_image, self.target_pose, use_d = True)
 
         if (self.net_G_name == "DPTN"):
             self.loss_G_l1_s, self.loss_G_ad_s, self.loss_G_style_s, self.loss_G_content_s = self.backward_G_basic(self.fake_image_s, self.source_image, use_d = False)
@@ -236,10 +272,12 @@ class GANPipe():
         self.optimizer_D.zero_grad()
         self.backward_D()
         self.optimizer_D.step()
+        self.ema_discriminator.update()
 
         self.optimizer_G.zero_grad()
         self.backward_G()
         self.optimizer_G.step()
+        self.ema_generator.update()
 
 
     def gen_results(self, path):

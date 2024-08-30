@@ -31,8 +31,8 @@ class ReadData_Phoenix(IterDataPipe):
 
         # self.base_imgs_tar = '/home/cwang/Projects/thesis/dataset/phoenix-2014-T.v3/chenyu/base_imgs_tar.tar.gz'
         # self.base_kps_tar = '/home/cwang/Projects/thesis/dataset/phoenix-2014-T.v3/chenyu/base_kps_tar.tar.gz'
-        self.base_imgs_tar = '/netscratch/cwang/datasets/phoenix-2014-T.v3/mp96/base_imgs_tar.tar.gz'
-        self.base_kps_tar = '/netscratch/cwang/datasets/phoenix-2014-T.v3/mp96/base_kps_tar.tar.gz'
+        self.base_imgs_tar = '/netscratch/alnaqish/datasets/phoenix-2014-T.v3/mp96/base_imgs_tar.tar.gz'
+        self.base_kps_tar = '/netscratch/alnaqish/datasets/phoenix-2014-T.v3/mp96/base_kps_tar.tar.gz'
         self.base_imgs_dict, self.base_kps_dict = self.get_base_info()
 
 
@@ -81,7 +81,7 @@ class ReadData_Phoenix(IterDataPipe):
             # plt.tight_layout()
             # plt.show(block=True)
 
-            yield base_img, base_heatmaps, img, kps, heatmaps, 0
+            yield base_img, base_heatmaps, 0, 0, 0, img, kps, heatmaps, 0, 0, 0
     
 
     def get_base_info(self):
@@ -136,9 +136,9 @@ class DS_Phoenix():
         self.train = train
 
         if(self.train):
-            self.path = "/netscratch/cwang/datasets/phoenix-2014-T.v3/mp96/train.tar.gz"
+            self.path = "/netscratch/alnaqish/datasets/phoenix-2014-T.v3/mp96/train.tar.gz"
         else:
-            self.path = "/netscratch/cwang/datasets/phoenix-2014-T.v3/mp96/test.tar.gz"
+            self.path = "/netscratch/alnaqish/datasets/phoenix-2014-T.v3/mp96/test.tar.gz"
 
         # self.path = "/home/cwang/Projects/thesis/dataset/phoenix-2014-T.v3/chenyu/chenyu.tar.gz"
 
