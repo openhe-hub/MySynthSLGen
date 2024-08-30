@@ -31,8 +31,6 @@ apex==0.9.10.dev0
 tensorboard==2.16.2
 pytest==8.2.0
 pytest-xdist==3.6.1
-jupyter==1.0.0
-jupyterlab==4.1.8
 ipykernel==6.29.4
 ipython==8.24.0
 aiohttp==3.9.5
