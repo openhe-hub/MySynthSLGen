@@ -27,7 +27,7 @@ parser.add_argument('--resume_dir', type=str, default='', help='specify the fold
 parser.add_argument('--epochs', type=int, default=30, help='how many epochs in total?')
 parser.add_argument('--ds_name', type=str, default='SynthSL', help='which dataset? ( Bosphorus / DeepFashion / Phoenix / SynthSL )')
 parser.add_argument('--n_workers', type=int, default=8, help='how many workers for the datapipe?')
-parser.add_argument('--batchsize_train', type=int, default=32, help='batchsize for training')
+parser.add_argument('--batchsize_train', type=int, default=8, help='batchsize for training')
 parser.add_argument('--batchsize_test', type=int, default=8, help='batchsize for testing')
 parser.add_argument('--which_g', type=int, default=7, help='which model for the generator?')
 parser.add_argument('--lr_g', type=float, default=0.0002, help='learning rate for the generator')
@@ -69,6 +69,12 @@ elif args.ds_name == "SynthSL":
     train_dataset = DS_SynthSL(train=True)
     test_dataset = DS_SynthSL(train=False)
     n_kp = 96 if args.input_type == "heatmaps" else 32
+elif args.ds_name == 'customized':
+    DATASET_ROOT_DIR = "dataset/customized_dataset" 
+    from DS_loader.DS_customized import CustomDataset
+    train_dataset = CustomDataset(root_dir=DATASET_ROOT_DIR, train=True)
+    test_dataset = CustomDataset(root_dir=DATASET_ROOT_DIR, train=False)
+    n_kp = 96
 
 # ---------------------------------------------------------------------------------------------------------
 net_G_dict = {
@@ -79,7 +85,7 @@ net_G_dict = {
     4: ("Swin_v2",          SwinTransformerV2(img_size=256, window_size=8, in_chans=2*n_kp+3)),
     5: ("Swin_v2_concat3",   SwinTransformerV2_concat3(n_kp=n_kp, img_size=256, window_size=8, in_chans=2*n_kp+3)),
     6: ("Swin_v2_concat4",   SwinTransformerV2_concat4(n_kp=n_kp, img_size=256, window_size=8, in_chans=3)),
-    7: ("Swin_v2_concat5",   SwinTransformerV2_concat5(n_kp=n_kp, img_size=256, window_size=8, in_chans=n_kp+(96 if args.input_type=='heatmaps' else 3)+3)),
+    7: ("Swin_v2_concat5",   SwinTransformerV2_concat5(n_kp=n_kp, img_size=256, window_size=8, in_chans=96*2+3)),
     8: ("StyleSwin",        Generator(size=256, n_kp=n_kp)),
     9: ("DPTN",             DPTNGenerator(image_nc=3, pose_nc=n_kp, ngf=64, img_f=512, layers=3, norm='instance', activation='LeakyReLU', 
                                       use_spect=False, use_coord=False, output_nc=3, num_blocks=3, affine=True, nhead=2, num_CABs=2, num_TTBs=2))

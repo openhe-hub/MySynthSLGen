@@ -631,7 +631,7 @@ class SwinTransformerV2_concat5(nn.Module):
         pretrained_window_sizes (tuple(int)): Pretrained window sizes of each layer.
     """
 
-    def __init__(self,  n_kp, img_size=224, patch_size=4, in_chans=3,
+    def __init__(self,  n_kp, img_size=256, patch_size=4, in_chans=3,
                  embed_dim=128, depths=[2, 2, 18, 2], num_heads=[4, 8, 16, 32],
                  window_size=7, mlp_ratio=4., qkv_bias=True,
                  drop_rate=0., attn_drop_rate=0., drop_path_rate=0.1,
@@ -700,6 +700,13 @@ class SwinTransformerV2_concat5(nn.Module):
 
         self.unpatch = UnPatch(input_hw=(patches_resolution[0], patches_resolution[1]),
                                 embed_dim=embed_dim, n_kp=n_kp, patch_size=patch_size)
+        
+        self.input_proj1 = nn.Conv2d(in_channels=133*2+3, 
+                                out_channels=96*2+3, 
+                                kernel_size=1)
+        self.input_proj2 = nn.Conv2d(in_channels=133, 
+                                out_channels=96, 
+                                kernel_size=1)
 
         self.apply(self._init_weights)
         for bly in self.layers:
@@ -753,6 +760,15 @@ class SwinTransformerV2_concat5(nn.Module):
             target_pose = self.ext_target_pose(target_pose)
         x = torch.cat([base_image, base_pose, target_pose], dim=1)
 
+        # print(x.shape)
+        # print(target_pose.shape)
+
+        # x = self.input_proj1(x)
+        # target_pose = self.input_proj2(target_pose)
+
+        # print(x.shape)
+        # print(target_pose.shape)
+
         x, r = self.forward_features(x, target_pose)
         # ==========================================
         # add residual connections
@@ -792,12 +808,12 @@ class SwinTransformerV2_concat5(nn.Module):
 if __name__=="__main__":
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    batch_size = 4
+    batch_size = 32
     n_kp = 96
     model = SwinTransformerV2_concat5(n_kp=n_kp, img_size=256, window_size=8, in_chans=2*n_kp+3).to(device)
     dummy_img = torch.rand((batch_size, 3, 256, 256)).to(device)
-    dummy_s_pose = torch.rand((batch_size, n_kp, 256, 256)).to(device)
-    dummy_t_pose = torch.rand((batch_size, n_kp, 256, 256)).to(device)
+    dummy_s_pose = torch.rand((batch_size, 133, 256, 256)).to(device)
+    dummy_t_pose = torch.rand((batch_size, 133, 256, 256)).to(device)
 
     # INIT LOGGERS
     starter, ender = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
