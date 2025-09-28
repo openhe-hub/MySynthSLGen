@@ -90,7 +90,8 @@ tensorboard --logdir=logs/
   python scripts/preprocess.py --input_dir ./dataset/how2sign-zhewen --output_dir ./dataset/customized_dataset
   ```
 2. `pkl2json`: transform pkl to json (avoid version conflict of numpy)
-3. training script
+3. `img_stats.py`: calculate the mean & std for datasets (used by normalization later)
+4. training script
   ```bash
   python train.py --ds_name "customized" --which_g "7" --ema_rate 0.999 --input_type "heatmaps"
   ```
