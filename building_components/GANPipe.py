@@ -15,7 +15,7 @@ from building_components.utils import OutputDirManager
 from building_components.utils import EMA
 
 class GANPipe():
-    def __init__(self, args, device, net_G_name, net_G, net_D) -> None:
+    def __init__(self, args, device, net_G_name, net_G, net_D, is_hand_l1=False) -> None:
         self.args = args
         self.device = device
         self.net_G_name = net_G_name
@@ -58,6 +58,15 @@ class GANPipe():
 
         self.net_G = nn.DataParallel(net_G)
         self.net_D = nn.DataParallel(net_D)
+
+        # Modification about hand mask in L1 Loss
+        self.is_hand_l1 = is_hand_l1
+        self.lambda_l1_hand = 3.0 
+        self.lambda_l1_body = 1.0
+        self.lambda_l1 = 1.0
+
+        self.hand_indices = list(range(54, 96))
+
 
 
     def get_start_epoch(self):
@@ -204,6 +213,40 @@ class GANPipe():
             return img
         return torch.cat((img, pose), dim=1)
 
+    # functions for hand-focused l1
+    def heatmaps_to_coords(self, heatmaps):
+        B, N, H, W = heatmaps.shape
+        heatmaps_flat = heatmaps.view(B, N, -1)
+        max_indices = torch.argmax(heatmaps_flat, dim=2)
+        x_coords = (max_indices % W).float()
+        y_coords = (max_indices // W).float()
+        coords = torch.stack([x_coords, y_coords], dim=2)
+        return coords
+
+    def create_hand_mask_from_kps(self, keypoints, img_shape, radius_scale=0.05):
+        B, N, _ = keypoints.shape
+        H, W = img_shape
+        mask = torch.zeros(B, 1, H, W, device=keypoints.device)
+        
+        # 创建一个坐标网格
+        y_coords, x_coords = torch.meshgrid(torch.arange(H, device=keypoints.device), torch.arange(W, device=keypoints.device))
+        coords = torch.stack([x_coords, y_coords], dim=-1).float() # [H, W, 2]
+
+        radius = H * radius_scale
+        radius_sq = radius ** 2
+
+        # 以每个手部kps为中心，做一个高斯滤波
+        for b in range(B):
+            for idx in self.hand_indices:
+                center_x, center_y = keypoints[b, idx, 0], keypoints[b, idx, 1]
+                if center_x <= 0 or center_y <= 0:
+                    continue
+                dist_sq = (coords[..., 0] - center_x)**2 + (coords[..., 1] - center_y)**2
+                keypoint_mask = (dist_sq < radius_sq).float()
+                mask[b, 0, :, :] = torch.max(mask[b, 0, :, :], keypoint_mask)
+
+        return mask
+
     def backward_D_basic(self, netD, real_image, fake_image, target_pose):
         # Real
         real = self.get_disc_input(real_image, target_pose)
@@ -231,9 +274,22 @@ class GANPipe():
 
 
     def backward_G_basic(self, fake_image, target_image, target_pose, use_d):
-        # Calculate reconstruction loss
-        loss_G_l1 = self.L1loss(fake_image, target_image)
-        loss_G_l1 = loss_G_l1 * self.lambda_l1
+        # print(target_pose.shape) # [N_batch, N_kps, H, W]
+        # print(real_image.shape)  # [N_batch, 3, H, W]
+        # print(fake_image.shape)  # [N_batch, 3, H, W]
+
+        # Traditional L1 Loss
+        if not self.is_hand_l1:
+            # print("using traditional l1")
+            loss_G_l1 = self.L1loss(fake_image, target_image)
+            loss_G_l1 = loss_G_l1 * self.lambda_l1
+        else:
+            # print("using hand l1")
+            # Hand-focused L1 Loss
+            hand_mask = self.create_hand_mask_from_kps(self.heatmaps_to_coords(target_pose), target_image.shape[2:])
+            weight_map = self.lambda_l1_body * (1 - hand_mask) + self.lambda_l1_hand * hand_mask
+            pixel_error = torch.abs(fake_image - target_image)
+            loss_G_l1 = (pixel_error * weight_map).mean() * self.lambda_l1
 
         # Calculate GAN loss
         loss_G_ad = None

@@ -93,7 +93,7 @@ tensorboard --logdir=logs/
 3. `img_stats.py`: calculate the mean & std for datasets (used by normalization later)
 4. training script
   ```bash
-  python train.py --ds_name "customized" --which_g "7" --ema_rate 0.999 --input_type "heatmaps"
+  python train.py --ds_name "customized" --which_g "7" --ema_rate 0.999 --input_type "heatmaps" --hand_l1 True
   ```
 
 ## Kps Index Choice

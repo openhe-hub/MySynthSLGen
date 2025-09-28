@@ -38,6 +38,7 @@ parser.add_argument('--which_epoch', type=str, default='final', help='which epoc
 parser.add_argument('--use_target_pose', type=bool, default=True, help='Include target pose in the discriminator input')
 parser.add_argument('--ema_rate', type=float, default=0.9999, help='decay rate for EMA')
 parser.add_argument('--input_type', type=str, default="heatmaps", help='options: heatmaps / depth / segm / normal')
+parser.add_argument('--hand_l1', type=bool, default=False, help='options: heatmaps / depth / segm / normal')
 
 args, _ = parser.parse_known_args()
 
@@ -99,7 +100,7 @@ net_D = ResDiscriminator(input_nc=input_nc, ndf=32, img_f=128, layers=3, norm='n
 print_model_size(net_G)
 
 # ---------------------------------------------------------------------------------------------------------
-gan = GANPipe(args, device, net_G_name, net_G, net_D)
+gan = GANPipe(args, device, net_G_name, net_G, net_D, is_hand_l1=args.hand_l1)
 
 #================================================================================================================
 ## Formally start training
