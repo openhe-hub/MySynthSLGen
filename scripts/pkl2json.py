@@ -2,7 +2,7 @@ import pickle
 import os
 import json
 
-folder = 'dataset/customized_dataset/test'
+folder = 'dataset/customized_dataset/train'
 files = [f for f in os.listdir(folder) if f.endswith("pkl")]
 for file in files:
     with open(os.path.join(folder, file), 'rb') as f:

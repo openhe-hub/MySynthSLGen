@@ -102,6 +102,8 @@ class GANPipe():
             filename = 'epoch_'+str(epoch)+'.pth'
         else:
             filename = epoch
+        
+        filename = 'epoch_latest.pth'
 
         torch.save({
             'epoch':str(epoch),

@@ -12,11 +12,6 @@ from torch.utils.data import DataLoader
 from torchdata.datapipes.iter import IterDataPipe, IterableWrapper
 from torchdata.datapipes import functional_datapipe
 
-# ========================================================================
-#   Module 1: Data Processor (Functional DataPipe)
-#   Reads a (frame folder, pkl file) pair and yields processed frames.
-# ========================================================================
-
 @functional_datapipe("read_video_and_kps")
 class VideoDataProcessor(IterDataPipe):
     """
@@ -27,7 +22,6 @@ class VideoDataProcessor(IterDataPipe):
         super().__init__()
         self.source_datapipe = source_datapipe
 
-        # Define the image preprocessing pipeline
         self.img_size = (256, 256)
         self.transform = transforms.Compose([
             transforms.Resize(self.img_size),
@@ -36,112 +30,98 @@ class VideoDataProcessor(IterDataPipe):
                                  std=[0.229, 0.224, 0.225])
         ])
 
+        # ============== 新增代码: 定义专用于手语识别的96个关键点索引 ==============
+        # 按照“手部 > 面部 > 上半身”的优先级进行选择
+        upper_body_indices = [0, 5, 6, 7, 8]  # 鼻子, 左右肩, 左右肘
+        face_expression_indices = (
+            list(range(27, 37)) +  # 眉毛 (10)
+            list(range(37, 49)) +  # 眼睛 (12)
+            list(range(49, 56)) +  # 鼻子 (7)
+            list(range(56, 68)) +  # 外唇 (12)
+            list(range(17, 25))    # 部分脸颊轮廓 (8)
+        )
+        hand_indices = list(range(91, 133))  # 左右手 (42)
+
+        # 组合并排序，最终得到一个有序的索引列表
+        self.selected_indices = torch.tensor(sorted(
+            upper_body_indices + face_expression_indices + hand_indices
+        ))
+        # 确认我们不多不少正好选择了96个点
+        assert len(self.selected_indices) == 96, "The number of selected keypoints must be 96."
+        # ============================================================================
+
+
     def __iter__(self):
         """
         Iterates over (frames_dir, pkl_path) pairs from the source datapipe.
         """
         for frames_dir, pkl_path in self.source_datapipe:
             
-            # 1. Load all keypoints for the entire video sequence at once
             try:
                 json_path = pkl_path.replace('pkl', 'json')
                 with open(json_path, 'r') as f:
-                    all_keypoints = json.load(f)['kps']
+                    # 加载所有关键点并立即转换为张量
+                    all_keypoints = torch.tensor(json.load(f)['kps'], dtype=torch.float32)
             except Exception as e:
-                print(f"Warning: Could not load pickle file {pkl_path}. Error: {e}. Skipping sequence.")
+                print(f"Warning: Could not load keypoint file {json_path}. Error: {e}. Skipping sequence.")
                 continue
 
-            # 2. Get all frame image paths and sort them to ensure correct order
+            try:
+                selected_keypoints = torch.index_select(all_keypoints, 2, self.selected_indices)
+            except IndexError as e:
+                print(f"Warning: Indexing error for {pkl_path}. Check keypoint dimensions. Skipping sequence. Error: {e}")
+                continue
+            
             frame_files = sorted(glob.glob(os.path.join(frames_dir, '*.*')))
             
             if not frame_files:
                 continue
 
-            # 3. Sanity check
-            if len(frame_files) != len(all_keypoints):
+            # Sanity check
+            if len(frame_files) != selected_keypoints.shape[0]:
                 print(f"Warning: Mismatch in sequence {os.path.basename(frames_dir)}. Skipping sequence.")
                 continue
 
-            # ============== 新增代码: 创建 "Base" 帧和 "Dummy" 张量 ==============
-            
-            # a. 将视频的第一帧作为 "base" 帧 (源)
+            # a. 将视频的第一帧作为 "base" 帧
             base_img_path = frame_files[0]
             base_img = self.transform(Image.open(base_img_path).convert('RGB'))
-            base_kps = torch.tensor(all_keypoints[0], dtype=torch.float32) * self.img_size[0]
-            base_kps = base_kps[0][:96]
+            base_kps = selected_keypoints[0].squeeze(0) * self.img_size[0] # [96, 2]
             base_heatmaps = self.kps_to_heatmaps(base_kps)
 
             # b. 为 depth, segm, normal 创建全零的占位符 (dummy) 张量
-            #    形状为 [1, H, W]，模仿单通道图像
             dummy_tensor = torch.zeros(1, self.img_size[0], self.img_size[1], dtype=torch.float32)
             
-            # =================================================================
-
-            # 4. Iterate through each frame (now considered the "target" frame)
+            # c. Iterate through each frame (now considered the "target" frame)
             for i, frame_path in enumerate(frame_files):
                 try:
-                    # Open, convert, and transform the target image
-                    img_tensor = self.transform(Image.open(frame_path).convert('RGB'))  # (3, 256, 256)
+                    img_tensor = self.transform(Image.open(frame_path).convert('RGB')) # [3, 256, 256]
 
-                    # Get the corresponding keypoints and scale them
-                    kps = torch.tensor(all_keypoints[i], dtype=torch.float32) * self.img_size[0]
-                    kps = kps[0][:96]  # (133, 2)
+                    kps = selected_keypoints[i].squeeze(0) * self.img_size[0] # [96, 2]
                     
-                    # Convert keypoint coordinates into heatmaps
-                    heatmaps = self.kps_to_heatmaps(kps)  # (133, 256, 256)
+                    heatmaps = self.kps_to_heatmaps(kps) # [96, 256, 256]
                     
-                    # ============== 修改产出 (yield) 的数据结构 ==============
-                    # 按照 GANPipe 期望的11个元素的顺序来产出
                     yield (
-                        base_img,         # base_img
-                        base_heatmaps,    # base_heatmap
-                        dummy_tensor,     # base_depth (dummy)
-                        dummy_tensor,     # base_segm (dummy)
-                        dummy_tensor,     # base_normal (dummy)
-                        img_tensor,       # img
-                        kps,              # coord (就是我们的 kps)
-                        heatmaps,         # heatmap
-                        dummy_tensor,     # depth (dummy)
-                        dummy_tensor,     # segm (dummy)
-                        dummy_tensor      # normal (dummy)
+                        base_img, base_heatmaps, dummy_tensor, dummy_tensor, dummy_tensor,
+                        img_tensor, kps, heatmaps, dummy_tensor, dummy_tensor, dummy_tensor
                     )
-                    # ========================================================
-
                 except Exception as e:
                     print(f"Warning: Error processing frame {frame_path}. Error: {e}. Skipping frame.")
                     continue
     
     def kps_to_heatmaps(self, keypoints: torch.Tensor, sigma: float = 6.0) -> torch.Tensor:
-        """
-        Converts keypoint coordinates into a stack of Gaussian heatmaps.
-        """
         heatmaps = []
         for joint in keypoints:
             mu_x = int(joint[0])
             mu_y = int(joint[1])
-            
-            # Only generate a heatmap if the keypoint is within the image bounds
             if 0 <= mu_x < self.img_size[0] and 0 <= mu_y < self.img_size[1]:
-                # Create coordinate grids
                 x = torch.arange(0, self.img_size[0], dtype=torch.float32)
                 y = torch.arange(0, self.img_size[1], dtype=torch.float32).unsqueeze(-1)
-                
-                # Calculate the Gaussian distribution
                 heatmap = torch.exp(-((x - mu_x)**2 + (y - mu_y)**2) / (2 * sigma**2))
             else:
-                # If keypoint is out of bounds, return a zero heatmap
                 heatmap = torch.zeros(self.img_size)
-            
             heatmaps.append(heatmap)
-
         return torch.stack(heatmaps)
 
-
-# ========================================================================
-#   Module 2: Dataset Definition and DataPipe Creation
-#   Scans the filesystem for (frame_folder, pkl_file) pairs and
-#   builds the torchdata pipeline.
-# ========================================================================
 
 class CustomDataset:
     def __init__(self, root_dir: str, train: bool = True):
@@ -202,11 +182,7 @@ class CustomDataset:
         
         return pipe
 
-# ========================================================================
-#   Module 3: Usage Example
-#   Demonstrates how to use the CustomDataset class and DataLoader.
-# ========================================================================
-
+# example
 if __name__ == '__main__':
     
     # IMPORTANT: Change this path to the root of your NEWLY CREATED structured dataset
@@ -236,11 +212,11 @@ if __name__ == '__main__':
         )
 
         # 4. Iterate through the DataLoader to get batches of data
-        for batch_idx, (images, keypoints, heatmaps) in enumerate(train_loader):
+        for batch_idx, (base_img, base_heatmap, base_depth, base_segm, base_normal, img, kps, heatmap, depth, segm, normal) in enumerate(train_loader):
             print(f"--- Batch {batch_idx + 1} ---")
-            print(f"  Images tensor shape:    {images.shape}")    # e.g., torch.Size([32, 3, 256, 256])
-            print(f"  Keypoints tensor shape: {keypoints.shape}")  # e.g., torch.Size([32, num_kps, 2])
-            print(f"  Heatmaps tensor shape:  {heatmaps.shape}")   # e.g., torch.Size([32, num_kps, 256, 256])
+            print(f"  Images tensor shape:    {img.shape}")    # e.g., torch.Size([32, 3, 256, 256])
+            print(f"  Keypoints tensor shape: {kps.shape}")  # e.g., torch.Size([32, num_kps, 2])
+            print(f"  Heatmaps tensor shape:  {heatmap.shape}")   # e.g., torch.Size([32, num_kps, 256, 256])
 
             # Stop after showing a few batches for demonstration
             if batch_idx >= 2:
