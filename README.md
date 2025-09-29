@@ -84,16 +84,20 @@ After executing the training script, a new directory with the format `exp_*/` wi
 tensorboard --logdir=logs/
 ```
 
-## Scripts (Before Training)
+## Scripts
 1. `preprocess`: extract frames, split train/test
   ```bash
   python scripts/preprocess.py --input_dir ./dataset/how2sign-zhewen --output_dir ./dataset/customized_dataset
   ```
 2. `pkl2json`: transform pkl to json (avoid version conflict of numpy)
 3. `img_stats.py`: calculate the mean & std for datasets (used by normalization later)
-4. training script
+4. training script (Note: normally test & eval will automatically done after training)
   ```bash
   python train.py --ds_name "customized" --which_g "7" --ema_rate 0.999 --input_type "heatmaps" --hand_l1 True
+  ```
+5. test & eval script
+  ```bash
+  python test.py --resume_dir runs/exp_1 --which_epoch "latest" --ds_name "customized" --which_g 7 --hand_l1 True
   ```
 
 ## Kps Index Choice
